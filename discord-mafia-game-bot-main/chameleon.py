@@ -2,6 +2,7 @@ import discord
 import textwrap
 from enum import Enum
 from random import randint
+import time
 
 ##############GAME VARIABLES################
 class Game_State(Enum):
@@ -11,6 +12,7 @@ class Game_State(Enum):
     MID_GAME = 4
     VOTING = 5
     GAME_ENDING = 6
+    GUESS = 7
 
 class Player():
     def __init__(self, member):
@@ -34,7 +36,7 @@ commands_text = """CHAMELEON BOT COMMANDS
 !join: Join a game that's getting hosted!(Only works after !host)
 !start: If everyone joined, start the game!
 !lame: If you don't like the word board, type lame!
-!vote @user: Command used during voting phase
+!vote @user: Command used during voting phase. Ping the suspicious user!
 !guess "your guess": Command for the chameleon guessing!
 """
 
@@ -50,6 +52,7 @@ wordbank = {'fruits': [['Apple', 'Banana', 'Cherry', 'Date'],
 topics = list(wordbank.keys())
 
 state = Game_State.IDLE
+coords = None
 topic = None
 secret = None
 players = []
@@ -91,7 +94,7 @@ def guess_is_correct(message):
    arguments: plain text of the chat log including the guess
    returns: bool
    """
-    if secret in message:
+    if secret.lower() in message:
         return True
     else:
         return False
@@ -179,11 +182,61 @@ def game_init():
     Args: None
     Returns: None
     """
+    global topic
+    global secret
+    global coords
     topic, secret, coords = choose_keyword()
     grid = ascii_word_grid(topic)
     chameleon = randint(0,player_count-1)
     players[chameleon].is_chameleon = True
-    print(grid)
+    print(secret)
+    # players[chameleon].member.send("YOU ARE THE CHAMELEON!")
+    # print(grid)
+    return grid
+
+def vote_complete():
+    """
+    Goes through player lists and sees if everyone voted so we can move on to the next stage
+    Args: None
+    Returns: None
+    """
+    for player in players:
+        if player.voted == False:
+            return False
+    return True
+
+def chameleon_caught():
+    """
+    Judges if the chameleon got caught based on the votes when game ends
+    Args: None
+    Returns: bool, player
+    """
+    max_count = 0
+    max_voted = None
+    for player in players:
+        if player.vote_count > max_count:
+            max_voted = player
+    if max_voted.is_chameleon:
+        return(True, max_voted)
+    else:
+        return(False, max_voted)
+    
+def game_reset():
+    """
+    """
+    global state
+    global coords
+    global topic
+    global secret
+    global players
+    global player_count
+    state = Game_State.IDLE
+    coords = None
+    topic = None
+    secret = None
+    players = []
+    player_count = 0
+
 
 # game_init()
 
@@ -204,22 +257,83 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+    global state
+    global players
+    global player_count
     if message.author == client.user:
-        return
+        if message.content.startswith('Voting Complete!'):
+            for player in players:
+                if player.is_chameleon:
+                    chameleon = player
+            results = chameleon_caught()
+            if results[0] == True:
+                await message.channel.send("The most voted member, "+ results[1].member.name + " WAS the CHAMELEON!!!")
+                await message.channel.send("Chameleon, guess the word!")
+                state = Game_State.GUESS
+            else:
+                await message.channel.send("The most voted member, "+ results[1].member.name + " was NOT the CHAMELEON!!!")
+                await message.channel.send("The chameleon, " + chameleon.member.name + "wins!!")
+        else:
+            return
 
     if message.content.startswith('!host') and state==Game_State.IDLE:
         state = Game_State.HOSTING
         await message.channel.send('Hello! :thumbsup: Thanks for using CHAMELEON BOT! Hosting game now! Type "!join" to join!')
+        await message.channel.send(rules_text)
+    if state==Game_State.IDLE and message.content.startswith('!commands'):
+        await message.channel.send(commands_text)
     if state==Game_State.HOSTING and message.content.startswith('!join'):
         player = Player(message.author)
         players.append(player)
         player_count += 1
+        await message.channel.send('Thanks for joining, ' + player.member.name + "!")
     if state==Game_State.HOSTING and message.content.startswith('!start'):
         state = Game_State.GAME_START
-        game_init()
+        await message.channel.send('Starting game!')
+        grid = game_init()
+        for player in players:
+            if player.is_chameleon:
+                await player.member.send("YOU ARE THE CHAMELEON!")
+            else:
+                await player.member.send("SEE "+ coords)
+        await message.channel.send(grid)
+        await message.channel.send("Take turns and describe the secret word with ONLY ONE word!")
+        time.sleep(15*player_count)
+        state = Game_State.VOTING
+        await message.channel.send("Now vote for the chameleon!")
+    if state==Game_State.VOTING and message.content.startswith('!vote') and message.mentions:
+        for player in players:
+            if player.member == message.author:
+                voter = player
+        print(voter.member.name)
+        mentioned = message.mentions[0]
+        # votee = message.content.split()[1].name
+        # print(message.content)
+        # print(votee)
+        for player in players:
+            if player.member == mentioned:
+                votee = player
+        votee.vote_count += 1
+        voter.voted = True
+        print(votee.vote_count)
+        print(voter.voted)
+        if vote_complete():
+            state = Game_State.GAME_ENDING
+            await message.channel.send("Voting Complete!")
+    if state==Game_State.GUESS and message.content.startswith('!guess'):
+        guess = message.content.split()[1]
+        if guess_is_correct(message.content):
+            await message.channel.send("CORRECT! The chameleon wins!!")
+            game_reset()
+        else:
+            await message.channel.send("WRONG! Humans win!!")
+            game_reset()
+
+        
+
 
 client.run(bot_token)
 
-print(keyword)
-print(coords)
+# print(keyword)
+# print(coords)
 
